@@ -221,6 +221,69 @@ fun AppNavHost() {
             var commitMsg by remember { mutableStateOf("Update from AI Studio applet") }
             var loading by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("") }
+            
+            val context = LocalContext.current
+            val folderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
+                if (uri != null) {
+                    loading = true
+                    status = "Scanning folder..."
+                    scope.launch {
+                        try {
+                            val contentResolver = context.contentResolver
+                            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+                            if (root != null) {
+                                val filesToPush = mutableListOf<Pair<String, ByteArray>>() // path relative to root, and content
+                                
+                                fun scan(doc: androidx.documentfile.provider.DocumentFile, currentPath: String) {
+                                    for (file in doc.listFiles()) {
+                                        if (file.isDirectory) {
+                                            scan(file, if (currentPath.isEmpty()) file.name!! else "$currentPath/${file.name}")
+                                        } else {
+                                            val filePath = if (currentPath.isEmpty()) file.name!! else "$currentPath/${file.name}"
+                                            contentResolver.openInputStream(file.uri)?.use { stream ->
+                                                filesToPush.add(filePath to stream.readBytes())
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    scan(root, "")
+                                }
+                                
+                                status = "Found ${filesToPush.size} files. Pushing..."
+                                var pushedCount = 0
+                                
+                                for ((filePath, fileBytes) in filesToPush) {
+                                    try {
+                                        status = "Pushing $filePath (${pushedCount + 1}/${filesToPush.size})..."
+                                        var sha: String? = null
+                                        try {
+                                            val res = GithubApiManager.api.getFileContent("Bearer $userPat", owner, repoName, filePath)
+                                            sha = res.sha
+                                        } catch (e: HttpException) {
+                                            if (e.code() != 404) throw e
+                                        }
+                                        val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
+                                        val req = PutFileRequest("Upload folder: $filePath", b64, sha, "main")
+                                        GithubApiManager.api.createOrUpdateFile("Bearer $userPat", owner, repoName, filePath, req)
+                                        pushedCount++
+                                    } catch(e: Exception) {
+                                        // Ignore individual file error to continue pushing others
+                                    }
+                                }
+                                status = "Success! Pushed $pushedCount/${filesToPush.size} files."
+                            } else {
+                                status = "Error mapping folder."
+                            }
+                        } catch (e: Exception) {
+                             status = "Error: ${e.message}"
+                        } finally {
+                            loading = false
+                        }
+                    }
+                }
+            }
 
             Scaffold { p ->
                 Column(Modifier.padding(p).fillMaxSize().padding(16.dp)) {
@@ -232,32 +295,40 @@ fun AppNavHost() {
                     Spacer(Modifier.height(8.dp))
                     Text(status, color = if(status.contains("Success")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(8.dp))
-                    Button(onClick = {
-                        loading = true
-                        status = "Pushing..."
-                        scope.launch {
-                            try {
-                                // 1. Get file SHA if exists
-                                var sha: String? = null
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            loading = true
+                            status = "Pushing single file..."
+                            scope.launch {
                                 try {
-                                    val res = GithubApiManager.api.getFileContent("Bearer $userPat", owner, repoName, path)
-                                    sha = res.sha
-                                } catch (e: HttpException) {
-                                    if (e.code() != 404) throw e
+                                    // 1. Get file SHA if exists
+                                    var sha: String? = null
+                                    try {
+                                        val res = GithubApiManager.api.getFileContent("Bearer $userPat", owner, repoName, path)
+                                        sha = res.sha
+                                    } catch (e: HttpException) {
+                                        if (e.code() != 404) throw e
+                                    }
+                                    
+                                    val b64 = Base64.encodeToString(content.toByteArray(), Base64.NO_WRAP)
+                                    val req = PutFileRequest(commitMsg, b64, sha, "main")
+                                    GithubApiManager.api.createOrUpdateFile("Bearer $userPat", owner, repoName, path, req)
+                                    status = "Success! File pushed."
+                                } catch (e: Exception) {
+                                    status = "Error: ${e.message}"
+                                } finally {
+                                    loading = false
                                 }
-                                
-                                val b64 = Base64.encodeToString(content.toByteArray(), Base64.NO_WRAP)
-                                val req = PutFileRequest(commitMsg, b64, sha, "main")
-                                GithubApiManager.api.createOrUpdateFile("Bearer $userPat", owner, repoName, path, req)
-                                status = "Success! File pushed."
-                            } catch (e: Exception) {
-                                status = "Error: ${e.message}"
-                            } finally {
-                                loading = false
                             }
+                        }, modifier = Modifier.weight(1f), enabled = !loading) {
+                            Text("Push File")
                         }
-                    }, modifier = Modifier.fillMaxWidth(), enabled = !loading) {
-                        Text("Push File")
+                        
+                        OutlinedButton(onClick = {
+                            folderLauncher.launch(null)
+                        }, modifier = Modifier.weight(1f), enabled = !loading) {
+                            Text("Push Folder")
+                        }
                     }
                 }
             }
