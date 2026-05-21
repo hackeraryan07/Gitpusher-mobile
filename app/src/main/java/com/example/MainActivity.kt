@@ -12,6 +12,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,6 +28,11 @@ import androidx.navigation.compose.rememberNavController
 import com.example.ui.theme.MyApplicationTheme
 import kotlinx.coroutines.launch
 import retrofit2.HttpException
+
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -162,7 +170,7 @@ fun AppNavHost() {
                                 Card(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
                                         .clickable { 
-                                            navController.navigate("push/${repo.full_name}")
+                                            navController.navigate("repo/${repo.full_name}?path=")
                                         }
                                 ) {
                                     Column(Modifier.padding(16.dp)) {
@@ -213,10 +221,76 @@ fun AppNavHost() {
                 }
             }
         }
-        composable("push/{owner}/{repo}") { backStackEntry ->
+        composable(
+            "repo/{owner}/{repo}?path={path}",
+            arguments = listOf(navArgument("path") { type = NavType.StringType; defaultValue = "" })
+        ) { backStackEntry ->
             val owner = backStackEntry.arguments?.getString("owner") ?: ""
             val repoName = backStackEntry.arguments?.getString("repo") ?: ""
-            var path by remember { mutableStateOf("README.md") }
+            val path = backStackEntry.arguments?.getString("path") ?: ""
+            
+            var items by remember { mutableStateOf<List<GithubContentItem>>(emptyList()) }
+            var loading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(path) {
+                loading = true
+                try {
+                    items = if (path.isEmpty()) {
+                        GithubApiManager.api.getRootContent("Bearer $userPat", owner, repoName)
+                    } else {
+                        GithubApiManager.api.getDirectoryContent("Bearer $userPat", owner, repoName, path)
+                    }
+                } catch (e: Exception) {
+                } finally {
+                    loading = false
+                }
+            }
+            
+            Scaffold { p ->
+                Column(Modifier.padding(p).fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                        Text(if (path.isEmpty()) repoName else path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        IconButton(onClick = { navController.navigate("push/$owner/$repoName?targetPath=$path") }) {
+                            Icon(Icons.Default.Add, contentDescription = "Upload Here")
+                        }
+                    }
+                    HorizontalDivider()
+                    if (loading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(items) { item ->
+                                val isDir = item.type == "dir"
+                                ListItem(
+                                    headlineContent = { Text(item.name) },
+                                    leadingContent = { 
+                                        Icon(if (isDir) Icons.Default.List else Icons.Default.Info, contentDescription = item.type)
+                                    },
+                                    modifier = Modifier.clickable {
+                                        if (isDir) {
+                                            navController.navigate("repo/$owner/$repoName?path=${item.path}")
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        composable(
+            "push/{owner}/{repo}?targetPath={targetPath}",
+            arguments = listOf(navArgument("targetPath") { type = NavType.StringType; defaultValue = "" })
+        ) { backStackEntry ->
+            val owner = backStackEntry.arguments?.getString("owner") ?: ""
+            val repoName = backStackEntry.arguments?.getString("repo") ?: ""
+            val targetPath = backStackEntry.arguments?.getString("targetPath") ?: ""
+            var path by remember { mutableStateOf(if (targetPath.isEmpty()) "README.md" else "$targetPath/README.md") }
             var content by remember { mutableStateOf("") }
             var commitMsg by remember { mutableStateOf("Update from AI Studio applet") }
             var loading by remember { mutableStateOf(false) }
@@ -251,28 +325,39 @@ fun AppNavHost() {
                                     scan(root, "")
                                 }
                                 
-                                status = "Found ${filesToPush.size} files. Pushing..."
-                                var pushedCount = 0
+                                status = "Found ${filesToPush.size} files. Uploading blobs concurrently..."
                                 
-                                for ((filePath, fileBytes) in filesToPush) {
-                                    try {
-                                        status = "Pushing $filePath (${pushedCount + 1}/${filesToPush.size})..."
-                                        var sha: String? = null
-                                        try {
-                                            val res = GithubApiManager.api.getFileContent("Bearer $userPat", owner, repoName, filePath)
-                                            sha = res.sha
-                                        } catch (e: HttpException) {
-                                            if (e.code() != 404) throw e
-                                        }
+                                val branchRes = GithubApiManager.api.getBranch("Bearer $userPat", owner, repoName, "main")
+                                val latestCommitSha = branchRes.commit.sha
+                                val baseTreeSha = branchRes.commit.commit.tree.sha
+                                
+                                val treeItems = filesToPush.map { (filePath, fileBytes) ->
+                                    async {
                                         val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
-                                        val req = PutFileRequest("Upload folder: $filePath", b64, sha, "main")
-                                        GithubApiManager.api.createOrUpdateFile("Bearer $userPat", owner, repoName, filePath, req)
-                                        pushedCount++
-                                    } catch(e: Exception) {
-                                        // Ignore individual file error to continue pushing others
+                                        val blobSha = GithubApiManager.api.createBlob(
+                                            "Bearer $userPat", owner, repoName, CreateBlobRequest(b64, "base64")
+                                        ).sha
+                                        val fullPath = if (targetPath.isEmpty()) filePath else "$targetPath/$filePath"
+                                        TreeItem(path = fullPath, mode = "100644", type = "blob", sha = blobSha)
                                     }
-                                }
-                                status = "Success! Pushed $pushedCount/${filesToPush.size} files."
+                                }.awaitAll()
+                                
+                                status = "Creating tree..."
+                                val newTreeSha = GithubApiManager.api.createTree(
+                                    "Bearer $userPat", owner, repoName, CreateTreeRequest(baseTreeSha, treeItems)
+                                ).sha
+                                
+                                status = "Creating commit..."
+                                val newCommitSha = GithubApiManager.api.createCommit(
+                                    "Bearer $userPat", owner, repoName, 
+                                    CreateCommitRequest("Upload folder via AI Studio applet", newTreeSha, listOf(latestCommitSha))
+                                ).sha
+                                
+                                GithubApiManager.api.updateRef(
+                                    "Bearer $userPat", owner, repoName, "main", UpdateRefRequest(newCommitSha, false)
+                                )
+                                
+                                status = "Success! Pushed ${filesToPush.size} files."
                             } else {
                                 status = "Error mapping folder."
                             }
@@ -287,7 +372,8 @@ fun AppNavHost() {
 
             Scaffold { p ->
                 Column(Modifier.padding(p).fillMaxSize().padding(16.dp)) {
-                    Text("Push File to $owner/$repoName", style = MaterialTheme.typography.titleMedium)
+                    val displayPath = if (targetPath.isEmpty()) "/" else "/$targetPath"
+                    Text("Upload to $owner/$repoName$displayPath", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("File Path") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = commitMsg, onValueChange = { commitMsg = it }, label = { Text("Commit Message") }, modifier = Modifier.fillMaxWidth())
