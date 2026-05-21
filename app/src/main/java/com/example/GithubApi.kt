@@ -104,6 +104,9 @@ data class TreeItem(
 )
 
 @JsonClass(generateAdapter = true)
+data class GitCommitResponse(val sha: String)
+
+@JsonClass(generateAdapter = true)
 data class CreateCommitRequest(val message: String, val tree: String, val parents: List<String>)
 
 @JsonClass(generateAdapter = true)
@@ -184,7 +187,7 @@ interface GithubApiService {
         @Path("owner") owner: String,
         @Path("repo") repo: String,
         @Body request: CreateCommitRequest
-    ): BranchCommit
+    ): GitCommitResponse
 
     @PATCH("repos/{owner}/{repo}/git/refs/heads/{branch}")
     suspend fun updateRef(
