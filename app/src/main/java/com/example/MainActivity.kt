@@ -33,6 +33,8 @@ import androidx.navigation.NavType
 import androidx.navigation.navArgument
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -295,28 +297,49 @@ fun AppNavHost() {
             var commitMsg by remember { mutableStateOf("Update from AI Studio applet") }
             var loading by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("") }
+            var uploadProgress by remember { mutableStateOf(0f) }
+            var currentStage by remember { mutableStateOf("idle") } // "idle", "scanning", "uploading", "creating_tree", "creating_commit", "updating_ref", "success", "error"
             
             val context = LocalContext.current
+            
+            // Local metadata for file mapping. Stores pointer uri instead of loading entire file bytes to prevent crash
+            class UploadFilePointer(
+                val relativePath: String,
+                val uri: android.net.Uri,
+                val name: String,
+                val size: Long
+            )
+
+            val EXCLUDE_DIRS = remember {
+                setOf(".git", ".gradle", "build", "node_modules", ".idea", ".vscode", "bin", "obj", "out", ".build-outputs")
+            }
+
             val folderLauncher = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree()) { uri ->
                 if (uri != null) {
                     loading = true
-                    status = "Scanning folder..."
+                    currentStage = "scanning"
+                    status = "Scanning folder structure..."
+                    uploadProgress = 0f
                     scope.launch {
                         try {
                             val contentResolver = context.contentResolver
                             val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
                             if (root != null) {
-                                val filesToPush = mutableListOf<Pair<String, ByteArray>>() // path relative to root, and content
+                                val filesToPush = mutableListOf<UploadFilePointer>()
+                                var scannedCount = 0
                                 
-                                fun scan(doc: androidx.documentfile.provider.DocumentFile, currentPath: String) {
-                                    for (file in doc.listFiles()) {
+                                fun scan(doc: androidx.documentfile.provider.DocumentFile, currentSubPath: String) {
+                                    val list = doc.listFiles()
+                                    for (file in list) {
+                                        val name = file.name ?: continue
                                         if (file.isDirectory) {
-                                            scan(file, if (currentPath.isEmpty()) file.name!! else "$currentPath/${file.name}")
+                                            if (EXCLUDE_DIRS.contains(name)) continue
+                                            scan(file, if (currentSubPath.isEmpty()) name else "$currentSubPath/$name")
                                         } else {
-                                            val filePath = if (currentPath.isEmpty()) file.name!! else "$currentPath/${file.name}"
-                                            contentResolver.openInputStream(file.uri)?.use { stream ->
-                                                filesToPush.add(filePath to stream.readBytes())
-                                            }
+                                            scannedCount++
+                                            val filePath = if (currentSubPath.isEmpty()) name else "$currentSubPath/$name"
+                                            filesToPush.add(UploadFilePointer(filePath, file.uri, name, file.length()))
+                                            status = "Scanned $scannedCount files (found: $name)"
                                         }
                                     }
                                 }
@@ -325,44 +348,82 @@ fun AppNavHost() {
                                     scan(root, "")
                                 }
                                 
-                                status = "Found ${filesToPush.size} files. Uploading blobs concurrently..."
+                                val totalFiles = filesToPush.size
+                                if (totalFiles == 0) {
+                                    status = "Error: Folder is empty or all contents are filter-ignored."
+                                    currentStage = "error"
+                                    loading = false
+                                    return@launch
+                                }
                                 
+                                status = "Fetched repository metadata..."
                                 val branchRes = GithubApiManager.api.getBranch("Bearer $userPat", owner, repoName, "main")
                                 val latestCommitSha = branchRes.commit.sha
                                 val baseTreeSha = branchRes.commit.commit.tree.sha
                                 
-                                val treeItems = filesToPush.map { (filePath, fileBytes) ->
+                                currentStage = "uploading"
+                                var uploadedCount = 0
+                                val lock = Any()
+                                val semaphore = Semaphore(permits = 3) // maximum 3 concurrent uploads to prevent network & RAM overload
+                                
+                                val treeItems = filesToPush.map { filePtr ->
                                     async {
-                                        val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
-                                        val blobSha = GithubApiManager.api.createBlob(
-                                            "Bearer $userPat", owner, repoName, CreateBlobRequest(b64, "base64")
-                                        ).sha
-                                        val fullPath = if (targetPath.isEmpty()) filePath else "$targetPath/$filePath"
-                                        TreeItem(path = fullPath, mode = "100644", type = "blob", sha = blobSha)
+                                        semaphore.withPermit {
+                                            // Lazily load file bytes into memory ONLY during upload turn
+                                            val fileBytes = try {
+                                                contentResolver.openInputStream(filePtr.uri)?.use { stream ->
+                                                    stream.readBytes()
+                                                } ?: ByteArray(0)
+                                            } catch (e: Exception) {
+                                                ByteArray(0)
+                                            }
+                                            
+                                            val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
+                                            val blobSha = GithubApiManager.api.createBlob(
+                                                "Bearer $userPat", owner, repoName, CreateBlobRequest(b64, "base64")
+                                            ).sha
+                                            
+                                            val fullPath = if (targetPath.isEmpty()) filePtr.relativePath else "$targetPath/${filePtr.relativePath}"
+                                            
+                                            synchronized(lock) {
+                                                uploadedCount++
+                                                status = "Uploaded $uploadedCount/$totalFiles files: ${filePtr.name}"
+                                                uploadProgress = uploadedCount.toFloat() / totalFiles
+                                            }
+                                            
+                                            TreeItem(path = fullPath, mode = "100644", type = "blob", sha = blobSha)
+                                        }
                                     }
                                 }.awaitAll()
                                 
-                                status = "Creating tree..."
+                                currentStage = "creating_tree"
+                                status = "Compiling Git tree registry on GitHub..."
                                 val newTreeSha = GithubApiManager.api.createTree(
                                     "Bearer $userPat", owner, repoName, CreateTreeRequest(baseTreeSha, treeItems)
                                 ).sha
                                 
-                                status = "Creating commit..."
+                                currentStage = "creating_commit"
+                                status = "Creating git commit on main..."
                                 val newCommitSha = GithubApiManager.api.createCommit(
                                     "Bearer $userPat", owner, repoName, 
-                                    CreateCommitRequest("Upload folder via AI Studio applet", newTreeSha, listOf(latestCommitSha))
+                                    CreateCommitRequest("Upload folder via GitHub Repo Explorer", newTreeSha, listOf(latestCommitSha))
                                 ).sha
                                 
+                                currentStage = "updating_ref"
+                                status = "Updating Git main head branch..."
                                 GithubApiManager.api.updateRef(
                                     "Bearer $userPat", owner, repoName, "main", UpdateRefRequest(newCommitSha, false)
                                 )
                                 
-                                status = "Success! Pushed ${filesToPush.size} files."
+                                status = "Success! Loaded & Pushed $totalFiles files."
+                                currentStage = "success"
                             } else {
-                                status = "Error mapping folder."
+                                status = "Error mapping folder structure."
+                                currentStage = "error"
                             }
                         } catch (e: Exception) {
                              status = "Error: ${e.message}"
+                             currentStage = "error"
                         } finally {
                             loading = false
                         }
@@ -375,15 +436,52 @@ fun AppNavHost() {
                     val displayPath = if (targetPath.isEmpty()) "/" else "/$targetPath"
                     Text("Upload to $owner/$repoName$displayPath", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("File Path") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = commitMsg, onValueChange = { commitMsg = it }, label = { Text("Commit Message") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("File Content") }, modifier = Modifier.fillMaxWidth().weight(1f))
-                    Spacer(Modifier.height(8.dp))
-                    Text(status, color = if(status.contains("Success")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.height(8.dp))
+                    
+                    if (loading) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                        ) {
+                            Column(Modifier.padding(16.dp)) {
+                                val stageHeading = when (currentStage) {
+                                    "scanning" -> "Scanning Directory Files..."
+                                    "uploading" -> "Concurrently Uploading Blobs..."
+                                    "creating_tree" -> "Generating Git Tree..."
+                                    "creating_commit" -> "Creating New Commit..."
+                                    "updating_ref" -> "Finalizing Branch Reference..."
+                                    else -> "Processing task..."
+                                }
+                                Text(stageHeading, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.height(8.dp))
+                                if (currentStage == "uploading") {
+                                    LinearProgressIndicator(
+                                        progress = uploadProgress,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                } else {
+                                    LinearProgressIndicator(
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Text(status, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("File Path") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = commitMsg, onValueChange = { commitMsg = it }, label = { Text("Commit Message") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("File Content") }, modifier = Modifier.fillMaxWidth().weight(1f))
+                        Spacer(Modifier.height(8.dp))
+                        if (status.isNotEmpty()) {
+                            Text(status, color = if(status.contains("Success")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                    
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
                             loading = true
+                            currentStage = "uploading"
                             status = "Pushing single file..."
                             scope.launch {
                                 try {
@@ -400,8 +498,10 @@ fun AppNavHost() {
                                     val req = PutFileRequest(commitMsg, b64, sha, "main")
                                     GithubApiManager.api.createOrUpdateFile("Bearer $userPat", owner, repoName, path, req)
                                     status = "Success! File pushed."
+                                    currentStage = "success"
                                 } catch (e: Exception) {
                                     status = "Error: ${e.message}"
+                                    currentStage = "error"
                                 } finally {
                                     loading = false
                                 }
