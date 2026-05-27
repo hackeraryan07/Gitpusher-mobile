@@ -1,0 +1,164 @@
+<!html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Repo Explorer | Android Application</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Space Grotesk', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #0B0B0F;
+            color: #F1F1F4;
+        }
+        .glow-radial {
+            background: radial-gradient(circle at 50% -20%, rgba(99, 102, 241, 0.15) 0%, rgba(0,0,0,0) 70%);
+        }
+    </style>
+</head>
+<body class="font-sans antialiased selection:bg-indigo-500 selection:text-white">
+    <div class="absolute inset-0 glow-radial pointer-events-none min-h-screen"></div>
+
+    <div class="relative max-w-4xl mx-auto px-6 py-16 md:py-24">
+        <!-- Header -->
+        <header class="text-center md:text-left md:flex md:items-center md:justify-between border-b border-zinc-800/80 pb-10">
+            <div class="mb-6 md:mb-0">
+                <div class="inline-flex items-center gap-2 px-3 py-1 bg-indigo-500/10 rounded-full border border-indigo-500/25 text-indigo-400 text-xs font-semibold mb-3 tracking-wide uppercase">
+                    Android Application
+                </div>
+                <h1 id="app-title" class="text-3xl md:text-4xl font-bold font-display text-white tracking-tight">
+                    GitHub Repo Explorer
+                </h1>
+                <p id="app-tagline" class="mt-2 text-zinc-400 max-w-lg text-sm md:text-base">
+                    Fast repository browser and multi-threaded, concurrent folder uploader for Android devices.
+                </p>
+            </div>
+            <div class="flex flex-col sm:flex-row gap-3 justify-center">
+                <a id="btn-download-release" href="/download/release" class="inline-flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] transition-all text-white font-medium text-sm px-6 py-3 rounded-lg shadow-lg hover:shadow-indigo-500/20">
+                    Download APK (Release)
+                </a>
+                <a id="btn-download-debug" href="/download/debug" class="inline-flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 hover:text-white text-zinc-300 font-medium text-sm px-5 py-3 rounded-lg border border-zinc-700/60 transition-all">
+                    Download Debug APK
+                </a>
+            </div>
+        </header>
+
+        <!-- Dynamic Status Section -->
+        <section class="my-8 py-4 px-5 bg-zinc-900/40 rounded-xl border border-zinc-800/60 flex items-center justify-between text-xs md:text-sm">
+            <div class="flex items-center gap-3">
+                <span class="relative flex h-2.5 w-2.5">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                </span>
+                <span class="text-zinc-300">
+                    Build status: <strong class="text-emerald-400 font-medium">Ready for deployment</strong>
+                </span>
+            </div>
+            <div id="build-status-text" class="text-zinc-500 text-xs text-right">
+                Running in Google Cloud Run
+            </div>
+        </section>
+
+        <!-- Core Features -->
+        <main class="space-y-12 py-8">
+            <div>
+                <h2 class="text-xl font-bold font-display text-white mb-6">Designed with Architectural Safety & Efficiency</h2>
+                <div class="grid md:grid-cols-2 gap-6">
+                    <!-- Feature 1 -->
+                    <div class="bg-zinc-900/30 rounded-xl border border-zinc-800/80 p-6 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-white font-display mb-2">🚀 Faster Scans & Uploads</h3>
+                            <p class="text-zinc-400 text-sm leading-relaxed">
+                                Avoids slow sequential uploads by leveraging concurrent asynchronous coroutine threads. Files are pushed simultaneously utilizing high-concurrency tree mapping.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Feature 2 -->
+                    <div class="bg-zinc-900/30 rounded-xl border border-zinc-800/80 p-6 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-white font-display mb-2">⛓️ OOM & Crash Mitigation</h3>
+                            <p class="text-zinc-400 text-sm leading-relaxed">
+                                Designed specifically for low-specification mobile devices with limited RAM. Includes <strong>lazy file resolution</strong> (loading bytes in batches only when actively uploaded) and a <strong>rate-limiting Semaphore</strong> capped at 3 concurrent connections to prevent crashing on large project sizes.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Feature 3 -->
+                    <div class="bg-zinc-900/30 rounded-xl border border-zinc-800/80 p-6 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-white font-display mb-2">📂 Deep Directory Mapping</h3>
+                            <p class="text-zinc-400 text-sm leading-relaxed">
+                                Scans documents recursively in deep hierarchies. Auto-ignores clutter and workspace outputs like <code>.git</code>, <code>build</code>, <code>node_modules</code>, and binary directories to protect project hygiene and data limits.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Feature 4 -->
+                    <div class="bg-zinc-900/30 rounded-xl border border-zinc-800/80 p-6 flex flex-col justify-between">
+                        <div>
+                            <h3 class="text-base font-semibold text-white font-display mb-2">📋 Granular Progress Stages</h3>
+                            <p class="text-zinc-400 text-sm leading-relaxed">
+                                Never guess upload state: features detailed staging trackers from "Scanning structure" through "Concurrently uploading blobs", "Generating Git Trees", and "Finalizing Branch Reference".
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- APK File Availability Check -->
+            <div class="bg-indigo-950/20 rounded-xl border border-indigo-900/30 p-6">
+                <h3 class="text-sm font-semibold text-indigo-400 uppercase tracking-wider mb-2 font-display">Technical Setup & Installation</h3>
+                <ol class="list-decimal list-inside text-zinc-300 text-sm space-y-2 leading-relaxed">
+                    <li>Download the <code>.apk</code> bundle artifact file using the buttons above.</li>
+                    <li>Sideload/transfer the APK to your Android device model.</li>
+                    <li>Ensure you have allowed installations from unknown sources in Android App Settings.</li>
+                    <li>Log in with your custom GitHub Personal Access Token (PAT) securely inside the app and explore your repos seamlessly.</li>
+                </ol>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="border-t border-zinc-800/60 mt-16 pt-8 text-center text-xs text-zinc-500">
+            <p>GitHub Repo Explorer App &copy; 2026. Made with Google AI Studio.</p>
+        </footer>
+    </div>
+
+    <!-- Script to dynamically check if APKs are physically ready -->
+    <script>
+        async function checkStatus() {
+            try {
+                const res = await fetch('/api/apk-status');
+                const data = await res.json();
+                
+                const releaseBtn = document.getElementById('btn-download-release');
+                const debugBtn = document.getElementById('btn-download-debug');
+                
+                if (!data.releaseExists && !data.debugExists) {
+                    document.getElementById('build-status-text').innerHTML = '⚠️ APK files building on server...';
+                } else {
+                    document.getElementById('build-status-text').innerHTML = '✅ APK files are compiled and ready to install';
+                }
+            } catch (e) {
+                console.error('Failed to contact server API', e);
+            }
+        }
+        checkStatus();
+        setInterval(checkStatus, 15000);
+    </script>
+</body>
+</html>

@@ -294,7 +294,7 @@ fun AppNavHost() {
             val targetPath = backStackEntry.arguments?.getString("targetPath") ?: ""
             var path by remember { mutableStateOf(if (targetPath.isEmpty()) "README.md" else "$targetPath/README.md") }
             var content by remember { mutableStateOf("") }
-            var commitMsg by remember { mutableStateOf("Update from AI Studio applet") }
+            var commitMsg by remember { mutableStateOf("") }
             var loading by remember { mutableStateOf(false) }
             var status by remember { mutableStateOf("") }
             var uploadProgress by remember { mutableStateOf(0f) }
@@ -406,7 +406,7 @@ fun AppNavHost() {
                                 status = "Creating git commit on main..."
                                 val newCommitSha = GithubApiManager.api.createCommit(
                                     "Bearer $userPat", owner, repoName, 
-                                    CreateCommitRequest("Upload folder via GitHub Repo Explorer", newTreeSha, listOf(latestCommitSha))
+                                    CreateCommitRequest(commitMsg, newTreeSha, listOf(latestCommitSha))
                                 ).sha
                                 
                                 currentStage = "updating_ref"
@@ -469,7 +469,18 @@ fun AppNavHost() {
                         }
                     } else {
                         OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("File Path") }, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = commitMsg, onValueChange = { commitMsg = it }, label = { Text("Commit Message") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(
+                            value = commitMsg,
+                            onValueChange = { commitMsg = it },
+                            label = { Text("Commit Message") },
+                            isError = commitMsg.isBlank(),
+                            supportingText = {
+                                if (commitMsg.isBlank()) {
+                                    Text("Commit message is required", color = MaterialTheme.colorScheme.error)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                         OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("File Content") }, modifier = Modifier.fillMaxWidth().weight(1f))
                         Spacer(Modifier.height(8.dp))
                         if (status.isNotEmpty()) {
@@ -506,13 +517,13 @@ fun AppNavHost() {
                                     loading = false
                                 }
                             }
-                        }, modifier = Modifier.weight(1f), enabled = !loading) {
+                        }, modifier = Modifier.weight(1f), enabled = !loading && commitMsg.isNotBlank()) {
                             Text("Push File")
                         }
                         
                         OutlinedButton(onClick = {
                             folderLauncher.launch(null)
-                        }, modifier = Modifier.weight(1f), enabled = !loading) {
+                        }, modifier = Modifier.weight(1f), enabled = !loading && commitMsg.isNotBlank()) {
                             Text("Push Folder")
                         }
                     }
