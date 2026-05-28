@@ -280,9 +280,13 @@ interface GithubApiService {
 }
 
 object GithubApiManager {
+    val client = OkHttpClient.Builder()
+        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY })
+        .build()
+        
     private val r = Retrofit.Builder()
         .baseUrl("https://api.github.com/")
-        .client(OkHttpClient.Builder().addInterceptor(HttpLoggingInterceptor().apply{level=HttpLoggingInterceptor.Level.BODY}).build())
+        .client(client)
         .addConverterFactory(MoshiConverterFactory.create())
         .build()
         

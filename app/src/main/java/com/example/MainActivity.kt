@@ -629,21 +629,40 @@ fun AppNavHost() {
                                 }
                                 items(artifacts) { artifact ->
                                     val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
+                                    val coroutineScope = rememberCoroutineScope()
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
                                         supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
                                         trailingContent = {
                                             if (!artifact.expired) {
                                                 Button(onClick = {
-                                                    val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(artifact.archive_download_url))
-                                                        .addRequestHeader("Authorization", "Bearer $userPat")
-                                                        .setTitle(artifact.name ?: "artifact.zip")
-                                                        .setDescription("Downloading artifact")
-                                                        .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                        .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                    dm.enqueue(request)
-                                                    android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                    coroutineScope.launch {
+                                                        try {
+                                                            val url = artifact.archive_download_url
+                                                            val request = okhttp3.Request.Builder()
+                                                                .url(url)
+                                                                .header("Authorization", "Bearer $userPat")
+                                                                .build()
+                                                            
+                                                            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                                GithubApiManager.client.newCall(request).execute()
+                                                            }
+                                                            
+                                                            val finalUrl = response.request.url.toString()
+                                                            response.close()
+                                                            
+                                                            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                                            val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
+                                                                .setTitle(artifact.name ?: "artifact.zip")
+                                                                .setDescription("Downloading artifact")
+                                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                                .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
+                                                            dm.enqueue(dmReq)
+                                                            android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                        } catch (e: Exception) {
+                                                            android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
                                                 }) {
                                                     Text("Download")
                                                 }
