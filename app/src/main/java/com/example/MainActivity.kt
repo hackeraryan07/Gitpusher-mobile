@@ -255,6 +255,11 @@ fun AppNavHost() {
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                         }
                         Text(if (path.isEmpty()) repoName else path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        if (path.isEmpty()) {
+                            TextButton(onClick = { navController.navigate("actions/$owner/$repoName") }) {
+                                Text("Actions")
+                            }
+                        }
                         IconButton(onClick = { navController.navigate("push/$owner/$repoName?targetPath=$path") }) {
                             Icon(Icons.Default.Add, contentDescription = "Upload Here")
                         }
@@ -525,6 +530,159 @@ fun AppNavHost() {
                             folderLauncher.launch(null)
                         }, modifier = Modifier.weight(1f), enabled = !loading && commitMsg.isNotBlank()) {
                             Text("Push Folder")
+                        }
+                    }
+                }
+            }
+        }
+        composable("actions/{owner}/{repo}") { backStackEntry ->
+            val owner = backStackEntry.arguments?.getString("owner") ?: ""
+            val repoName = backStackEntry.arguments?.getString("repo") ?: ""
+            
+            var runs by remember { mutableStateOf<List<WorkflowRun>>(emptyList()) }
+            var loading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                loading = true
+                try {
+                    val res = GithubApiManager.api.getWorkflowRuns("Bearer $userPat", owner, repoName)
+                    runs = res.workflow_runs
+                } catch (e: Exception) {
+                } finally {
+                    loading = false
+                }
+            }
+            
+            Scaffold { p ->
+                Column(Modifier.padding(p).fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                        Text("Actions - $repoName", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    }
+                    HorizontalDivider()
+                    if (loading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            items(runs) { run ->
+                                ListItem(
+                                    headlineContent = { Text(run.display_title ?: run.name ?: "Run #${run.id}") },
+                                    supportingContent = { Text("${run.status} - ${run.conclusion ?: "pending"}") },
+                                    modifier = Modifier.clickable {
+                                        navController.navigate("action_run/$owner/$repoName/${run.id}")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        composable(
+            "action_run/{owner}/{repo}/{run_id}",
+            arguments = listOf(navArgument("run_id") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val owner = backStackEntry.arguments?.getString("owner") ?: ""
+            val repoName = backStackEntry.arguments?.getString("repo") ?: ""
+            val runId = backStackEntry.arguments?.getLong("run_id") ?: 0L
+            val context = LocalContext.current
+            
+            var jobs by remember { mutableStateOf<List<WorkflowJob>>(emptyList()) }
+            var artifacts by remember { mutableStateOf<List<Artifact>>(emptyList()) }
+            var loading by remember { mutableStateOf(true) }
+
+            LaunchedEffect(Unit) {
+                loading = true
+                try {
+                    val jobsRes = async { GithubApiManager.api.getWorkflowRunJobs("Bearer $userPat", owner, repoName, runId) }
+                    val artifactsRes = async { GithubApiManager.api.getRunArtifacts("Bearer $userPat", owner, repoName, runId) }
+                    jobs = jobsRes.await().jobs
+                    artifacts = artifactsRes.await().artifacts
+                } catch (e: Exception) {
+                } finally {
+                    loading = false
+                }
+            }
+            
+            Scaffold { p ->
+                Column(Modifier.padding(p).fillMaxSize()) {
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                        Text("Run #$runId", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    }
+                    HorizontalDivider()
+                    if (loading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        LazyColumn(Modifier.fillMaxSize()) {
+                            if (artifacts.isNotEmpty()) {
+                                item {
+                                    Text("Artifacts", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(16.dp))
+                                }
+                                items(artifacts) { artifact ->
+                                    val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
+                                    ListItem(
+                                        headlineContent = { Text(artifact.name ?: "Unknown") },
+                                        supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
+                                        trailingContent = {
+                                            if (!artifact.expired) {
+                                                Button(onClick = {
+                                                    val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                                    val request = android.app.DownloadManager.Request(android.net.Uri.parse(artifact.archive_download_url))
+                                                        .addRequestHeader("Authorization", "Bearer $userPat")
+                                                        .setTitle(artifact.name ?: "artifact.zip")
+                                                        .setDescription("Downloading artifact")
+                                                        .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                        .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
+                                                    dm.enqueue(request)
+                                                    android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                }) {
+                                                    Text("Download")
+                                                }
+                                            } else {
+                                                Text("Expired", color = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                            
+                            item {
+                                Text("Jobs & Logs", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(16.dp))
+                            }
+                            items(jobs) { job ->
+                                var expanded by remember { mutableStateOf(false) }
+                                Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).clickable { expanded = !expanded }) {
+                                    Column(Modifier.padding(16.dp)) {
+                                        Text(job.name ?: "Job", style = MaterialTheme.typography.titleMedium)
+                                        Text("Status: ${job.status ?: "unknown"} - ${job.conclusion ?: "pending"}", style = MaterialTheme.typography.bodySmall)
+                                        
+                                        if (expanded) {
+                                            Spacer(Modifier.height(8.dp))
+                                            job.steps?.forEach { step ->
+                                                val statusColor = when (step.conclusion) {
+                                                    "success" -> androidx.compose.ui.graphics.Color(0xFF4CAF50)
+                                                    "failure" -> MaterialTheme.colorScheme.error
+                                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                }
+                                                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                                    Text("• ", color = statusColor)
+                                                    Text(step.name ?: "Step", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                                    Text(step.conclusion ?: step.status ?: "", style = MaterialTheme.typography.bodySmall, color = statusColor)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

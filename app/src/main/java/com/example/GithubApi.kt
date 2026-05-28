@@ -112,6 +112,63 @@ data class CreateCommitRequest(val message: String, val tree: String, val parent
 @JsonClass(generateAdapter = true)
 data class UpdateRefRequest(val sha: String, val force: Boolean = false)
 
+@JsonClass(generateAdapter = true)
+data class WorkflowRunsResponse(
+    val total_count: Int,
+    val workflow_runs: List<WorkflowRun>
+)
+
+@JsonClass(generateAdapter = true)
+data class WorkflowRun(
+    val id: Long,
+    val name: String?,
+    val display_title: String?,
+    val status: String?,
+    val conclusion: String?,
+    val head_branch: String?,
+    val created_at: String?,
+    val updated_at: String?
+)
+
+@JsonClass(generateAdapter = true)
+data class WorkflowRunJobsResponse(
+    val total_count: Int,
+    val jobs: List<WorkflowJob>
+)
+
+@JsonClass(generateAdapter = true)
+data class WorkflowJob(
+    val id: Long,
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    val html_url: String?,
+    val steps: List<WorkflowStep>?
+)
+
+@JsonClass(generateAdapter = true)
+data class WorkflowStep(
+    val name: String?,
+    val status: String?,
+    val conclusion: String?,
+    val number: Int
+)
+
+@JsonClass(generateAdapter = true)
+data class ArtifactsResponse(
+    val total_count: Int,
+    val artifacts: List<Artifact>
+)
+
+@JsonClass(generateAdapter = true)
+data class Artifact(
+    val id: Long,
+    val name: String?,
+    val size_in_bytes: Long,
+    val archive_download_url: String,
+    val expired: Boolean
+)
+
 interface GithubApiService {
     @GET("user")
     suspend fun getUser(@Header("Authorization") token: String): GithubUser
@@ -197,6 +254,29 @@ interface GithubApiService {
         @Path("branch") branch: String,
         @Body request: UpdateRefRequest
     )
+
+    @GET("repos/{owner}/{repo}/actions/runs")
+    suspend fun getWorkflowRuns(
+        @Header("Authorization") token: String,
+        @Path("owner") owner: String,
+        @Path("repo") repo: String
+    ): WorkflowRunsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs/{run_id}/jobs")
+    suspend fun getWorkflowRunJobs(
+        @Header("Authorization") token: String,
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("run_id") runId: Long
+    ): WorkflowRunJobsResponse
+
+    @GET("repos/{owner}/{repo}/actions/runs/{run_id}/artifacts")
+    suspend fun getRunArtifacts(
+        @Header("Authorization") token: String,
+        @Path("owner") owner: String,
+        @Path("repo") repo: String,
+        @Path("run_id") runId: Long
+    ): ArtifactsResponse
 }
 
 object GithubApiManager {
