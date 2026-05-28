@@ -590,6 +590,7 @@ fun AppNavHost() {
             val repoName = backStackEntry.arguments?.getString("repo") ?: ""
             val runId = backStackEntry.arguments?.getLong("run_id") ?: 0L
             val context = LocalContext.current
+            val coroutineScope = rememberCoroutineScope()
             
             var jobs by remember { mutableStateOf<List<WorkflowJob>>(emptyList()) }
             var artifacts by remember { mutableStateOf<List<Artifact>>(emptyList()) }
@@ -629,7 +630,6 @@ fun AppNavHost() {
                                 }
                                 items(artifacts) { artifact ->
                                     val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
-                                    val coroutineScope = rememberCoroutineScope()
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
                                         supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
