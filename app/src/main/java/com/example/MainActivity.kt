@@ -629,7 +629,8 @@ fun AppNavHost() {
                                     Text("Artifacts", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(16.dp))
                                 }
                                 items(artifacts) { artifact ->
-                                    var isPreparing by remember { mutableStateOf(false) }
+                                    var isDownloading by remember { mutableStateOf(false) }
+                                    var progress by remember { mutableStateOf(-1) }
                                     val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
@@ -637,52 +638,144 @@ fun AppNavHost() {
                                         trailingContent = {
                                             if (!artifact.expired) {
                                                                 val startDownload = {
-                                                                    isPreparing = true
-                                                                    coroutineScope.launch {
+                                                                    isDownloading = true
+                                                                    progress = 0
+                                                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                                        val fileName = artifact.name ?: "artifact"
+                                                                        val notificationManager = context.getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                                                                        val channelId = "downloads_gh"
+                                                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                                                            val channel = android.app.NotificationChannel(channelId, "Downloads", android.app.NotificationManager.IMPORTANCE_LOW)
+                                                                            notificationManager.createNotificationChannel(channel)
+                                                                        }
+                                                                        val notificationId = artifact.id?.hashCode() ?: fileName.hashCode()
+                                                                        val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
+                                                                            .setContentTitle("Downloading $fileName")
+                                                                            .setSmallIcon(android.R.drawable.stat_sys_download)
+                                                                            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+                                                                            .setOngoing(true)
+                                                                        
                                                                         try {
-                                                                            android.widget.Toast.makeText(context, "Preparing download...", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                                                android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            }
+                                                                            
                                                                             val url = artifact.archive_download_url
                                                                             val request = okhttp3.Request.Builder()
                                                                                 .url(url)
                                                                                 .header("Authorization", "Bearer $userPat")
                                                                                 .build()
                                                                             
-                                                                            // Configure OkHttpClient to NOT automatically follow redirects.
-                                                                            // This prevents downloading the entire payload via the foreground OkHttp client
-                                                                            // and resolves the location/pre-signed S3 link instantly.
                                                                             val clientNoRedirects = GithubApiManager.client.newBuilder()
                                                                                 .followRedirects(false)
                                                                                 .followSslRedirects(false)
                                                                                 .build()
                                                                             
-                                                                            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                                                clientNoRedirects.newCall(request).execute()
-                                                                            }
-                                                                            
+                                                                            val response = clientNoRedirects.newCall(request).execute()
                                                                             val finalUrl = response.header("Location") ?: response.request.url.toString()
                                                                             response.close()
                                                                             
-                                                                            val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                                            val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
-                                                                                .setTitle(artifact.name ?: "artifact.zip")
-                                                                                .setDescription("Downloading artifact")
-                                                                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                                            val downloadReq = okhttp3.Request.Builder().url(finalUrl).build()
+                                                                            val downloadResp = GithubApiManager.client.newCall(downloadReq).execute()
+                                                                            val body = downloadResp.body
+                                                                            if (body == null) throw Exception("Empty response body")
                                                                             
-                                                                            try {
-                                                                                dmReq.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                                            } catch (se: SecurityException) {
-                                                                                // Safe permission fallback: write inside the app's sandboxed external files folder,
-                                                                                // which does NOT require any write permission on any Android versions.
-                                                                                dmReq.setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                                                android.widget.Toast.makeText(context, "Saved to app directory due to permission constraints", android.widget.Toast.LENGTH_LONG).show()
+                                                                            val totalSize = body.contentLength()
+                                                                            var downloadedSize = 0L
+                                                                            
+                                                                            val resolver = context.contentResolver
+                                                                            val contentUri = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                                                                val values = android.content.ContentValues().apply {
+                                                                                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "$fileName.ghdownload")
+                                                                                    put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/zip")
+                                                                                    put(android.provider.MediaStore.Downloads.IS_PENDING, 1)
+                                                                                }
+                                                                                resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                                                                            } else null
+                                                                            
+                                                                            var outputStream: java.io.OutputStream? = null
+                                                                            var outputFile: java.io.File? = null
+                                                                            
+                                                                            if (contentUri != null) {
+                                                                                outputStream = resolver.openOutputStream(contentUri)
+                                                                            } else {
+                                                                                val dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                                                                if (!dir.exists()) dir.mkdirs()
+                                                                                outputFile = java.io.File(dir, "$fileName.ghdownload")
+                                                                                outputStream = java.io.FileOutputStream(outputFile)
                                                                             }
                                                                             
-                                                                            dm.enqueue(dmReq)
-                                                                            android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            if (outputStream == null) {
+                                                                                // Fallback to app directory
+                                                                                val dir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                                                                if (dir != null) {
+                                                                                    if (!dir.exists()) dir.mkdirs()
+                                                                                    outputFile = java.io.File(dir, "$fileName.ghdownload")
+                                                                                    outputStream = java.io.FileOutputStream(outputFile)
+                                                                                }
+                                                                            }
+                                                                            
+                                                                            if (outputStream == null) throw Exception("Could not create output file")
+                                                                            
+                                                                            val inputStream = body.byteStream()
+                                                                            val buffer = ByteArray(8192)
+                                                                            var read: Int
+                                                                            var lastUpdate = System.currentTimeMillis()
+                                                                            var currentProgress = 0
+                                                                            
+                                                                            while (inputStream.read(buffer).also { read = it } != -1) {
+                                                                                outputStream.write(buffer, 0, read)
+                                                                                downloadedSize += read
+                                                                                val p = if (totalSize > 0) ((downloadedSize * 100) / totalSize).toInt() else 0
+                                                                                if (p > currentProgress) {
+                                                                                    currentProgress = p
+                                                                                    val now = System.currentTimeMillis()
+                                                                                    if (now - lastUpdate > 500 || p == 100) {
+                                                                                        lastUpdate = now
+                                                                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { progress = p }
+                                                                                        builder.setProgress(100, p, totalSize <= 0)
+                                                                                        notificationManager.notify(notificationId, builder.build())
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                            outputStream.flush()
+                                                                            outputStream.close()
+                                                                            inputStream.close()
+                                                                            
+                                                                            if (contentUri != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                                                                val values = android.content.ContentValues().apply {
+                                                                                    put(android.provider.MediaStore.Downloads.DISPLAY_NAME, "$fileName.zip")
+                                                                                    put(android.provider.MediaStore.Downloads.IS_PENDING, 0)
+                                                                                }
+                                                                                resolver.update(contentUri, values, null, null)
+                                                                            } else if (outputFile != null) {
+                                                                                val newFile = java.io.File(outputFile.parent, "$fileName.zip")
+                                                                                if (outputFile.exists()) outputFile.renameTo(newFile)
+                                                                            }
+                                                                            
+                                                                            builder.setContentTitle("$fileName downloaded")
+                                                                                .setProgress(0, 0, false)
+                                                                                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                                                                                .setOngoing(false)
+                                                                            notificationManager.notify(notificationId, builder.build())
+                                                                            
+                                                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                                                android.widget.Toast.makeText(context, "Download complete", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            }
                                                                         } catch (e: Exception) {
-                                                                            android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            e.printStackTrace()
+                                                                            builder.setContentTitle("Download failed: $fileName")
+                                                                                .setContentText(e.message)
+                                                                                .setProgress(0, 0, false)
+                                                                                .setOngoing(false)
+                                                                            notificationManager.notify(notificationId, builder.build())
+                                                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                                                android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                                            }
                                                                         } finally {
-                                                                            isPreparing = false
+                                                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                                                                isDownloading = false
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -710,10 +803,12 @@ fun AppNavHost() {
                                                                             startDownload()
                                                                         }
                                                                     },
-                                                                    enabled = !isPreparing
+                                                                    enabled = !isDownloading
                                                                 ) {
-                                                                    if (isPreparing) {
-                                                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                                                    if (isDownloading) {
+                                                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                                        Text(if (progress >= 0) "$progress%" else "...")
                                                                     } else {
                                                                         Text("Download")
                                                                     }
