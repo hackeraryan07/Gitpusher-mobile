@@ -629,115 +629,52 @@ fun AppNavHost() {
                                     Text("Artifacts", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(16.dp))
                                 }
                                 items(artifacts) { artifact ->
+                                    var isPreparing by remember { mutableStateOf(false) }
                                     val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
-                                    var isDownloading by remember { mutableStateOf(false) }
-                                    var progress by remember { mutableFloatStateOf(0f) }
-                                    val coroutineScope = rememberCoroutineScope()
-                                    
-                                    val startDownload = {
-                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            isDownloading = true
-                                            progress = 0f
-                                            try {
-                                                val url = artifact.archive_download_url
-                                                val request = okhttp3.Request.Builder()
-                                                    .url(url)
-                                                    .header("Authorization", "Bearer $userPat")
-                                                    .build()
-                                                
-                                                val response = GithubApiManager.client.newCall(request).execute()
-                                                if (response.isSuccessful) {
-                                                    val body = response.body
-                                                    if (body != null) {
-                                                        val length = body.contentLength()
-                                                        var outputStream: java.io.OutputStream? = null
-                                                        var filePath = ""
-                                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                                                            val contentValues = android.content.ContentValues().apply {
-                                                                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "${artifact.name ?: "artifact"}.zip")
-                                                                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/zip")
-                                                                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
-                                                            }
-                                                            val uri = context.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-                                                            if (uri != null) {
-                                                                outputStream = context.contentResolver.openOutputStream(uri)
-                                                                filePath = "Downloads folder"
-                                                            }
-                                                        } else {
-                                                            val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-                                                            if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                                                            val file = java.io.File(downloadsDir, "${artifact.name ?: "artifact"}.zip")
-                                                            outputStream = java.io.FileOutputStream(file)
-                                                            filePath = file.absolutePath
-                                                        }
-                                                        
-                                                        if (outputStream != null) {
-                                                            var totalRead = 0L
-                                                            var read = 0
-                                                            val buffer = ByteArray(8192)
-                                                            var lastUpdate = System.currentTimeMillis()
-                                                            val inputStream = body.byteStream()
-                                                            while (inputStream.read(buffer).also { read = it } != -1) {
-                                                                outputStream.write(buffer, 0, read)
-                                                                totalRead += read
-                                                                if (length > 0 && System.currentTimeMillis() - lastUpdate > 100) {
-                                                                    progress = totalRead.toFloat() / length.toFloat()
-                                                                    lastUpdate = System.currentTimeMillis()
-                                                                }
-                                                            }
-                                                            outputStream.close()
-                                                            inputStream.close()
-                                                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                                android.widget.Toast.makeText(context, "Saved to $filePath", android.widget.Toast.LENGTH_LONG).show()
-                                                            }
-                                                        }
-                                                    }
-                                                } else {
-                                                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                        android.widget.Toast.makeText(context, "Failed: ${response.code}", android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                                response.close()
-                                            } catch (e: Exception) {
-                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                                    android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
-                                                }
-                                            } finally {
-                                                isDownloading = false
-                                                progress = 0f
-                                            }
-                                        }
-                                    }
-                                    
-                                    val storagePermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                                        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-                                    ) { isGranted ->
-                                        if (isGranted) {
-                                            startDownload()
-                                        } else {
-                                            android.widget.Toast.makeText(context, "Storage permission denied", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
                                         supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
                                         trailingContent = {
                                             if (!artifact.expired) {
-                                                if (isDownloading) {
-                                                    CircularProgressIndicator(progress = { progress }, modifier = Modifier.size(24.dp))
-                                                } else {
-                                                    Button(onClick = {
-                                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                                                            startDownload()
-                                                        } else {
-                                                            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                                                                startDownload()
-                                                            } else {
-                                                                storagePermissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                                Button(
+                                                    onClick = {
+                                                        isPreparing = true
+                                                        coroutineScope.launch {
+                                                            try {
+                                                                android.widget.Toast.makeText(context, "Preparing download...", android.widget.Toast.LENGTH_SHORT).show()
+                                                                val url = artifact.archive_download_url
+                                                                val request = okhttp3.Request.Builder()
+                                                                    .url(url)
+                                                                    .header("Authorization", "Bearer $userPat")
+                                                                    .build()
+                                                                
+                                                                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                                    GithubApiManager.client.newCall(request).execute()
+                                                                }
+                                                                
+                                                                val finalUrl = response.request.url.toString()
+                                                                response.close()
+                                                                
+                                                                val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
+                                                                    .setTitle(artifact.name ?: "artifact.zip")
+                                                                    .setDescription("Downloading artifact")
+                                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
+                                                                dm.enqueue(dmReq)
+                                                                android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } catch (e: Exception) {
+                                                                android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } finally {
+                                                                isPreparing = false
                                                             }
                                                         }
-                                                    }) {
+                                                    },
+                                                    enabled = !isPreparing
+                                                ) {
+                                                    if (isPreparing) {
+                                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                                    } else {
                                                         Text("Download")
                                                     }
                                                 }
