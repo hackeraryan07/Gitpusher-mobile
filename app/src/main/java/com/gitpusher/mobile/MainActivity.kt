@@ -643,16 +643,21 @@ fun AppNavHost() {
                                                         coroutineScope.launch {
                                                             try {
                                                                 val url = artifact.archive_download_url
+                                                                val clientNoRedirects = GithubApiManager.client.newBuilder()
+                                                                    .followRedirects(false)
+                                                                    .followSslRedirects(false)
+                                                                    .build()
+                                                                    
                                                                 val request = okhttp3.Request.Builder()
                                                                     .url(url)
                                                                     .header("Authorization", "Bearer $userPat")
                                                                     .build()
                                                                 
                                                                 val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                                    GithubApiManager.client.newCall(request).execute()
+                                                                    clientNoRedirects.newCall(request).execute()
                                                                 }
                                                                 
-                                                                val finalUrl = response.request.url.toString()
+                                                                val finalUrl = response.header("Location") ?: response.request.url.toString()
                                                                 response.close()
                                                                 
                                                                 val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
@@ -661,6 +666,9 @@ fun AppNavHost() {
                                                                     .setDescription("Downloading artifact")
                                                                     .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                                                                     .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
+                                                                    .setAllowedNetworkTypes(android.app.DownloadManager.Request.NETWORK_WIFI or android.app.DownloadManager.Request.NETWORK_MOBILE)
+                                                                    .setAllowedOverMetered(true)
+                                                                    .setAllowedOverRoaming(true)
                                                                 dm.enqueue(dmReq)
                                                                 android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
                                                             } catch (e: Exception) {
