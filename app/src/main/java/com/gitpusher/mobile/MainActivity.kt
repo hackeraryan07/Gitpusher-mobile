@@ -642,26 +642,43 @@ fun AppNavHost() {
                                                         android.widget.Toast.makeText(context, "Preparing download...", android.widget.Toast.LENGTH_SHORT).show()
                                                         coroutineScope.launch {
                                                             try {
-                                                                val url = artifact.archive_download_url
+                                                                var currentUrl = artifact.archive_download_url
+                                                                val userAgentStr = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                                                
                                                                 val clientNoRedirects = GithubApiManager.client.newBuilder()
                                                                     .followRedirects(false)
                                                                     .followSslRedirects(false)
                                                                     .build()
                                                                     
-                                                                val request = okhttp3.Request.Builder()
-                                                                    .url(url)
-                                                                    .header("Authorization", "Bearer $userPat")
-                                                                    .build()
-                                                                
-                                                                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                                    clientNoRedirects.newCall(request).execute()
+                                                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                                    var redirectCount = 0
+                                                                    while (redirectCount < 5) {
+                                                                        val reqBuilder = okhttp3.Request.Builder()
+                                                                            .url(currentUrl)
+                                                                            .header("User-Agent", userAgentStr)
+                                                                        if (currentUrl.startsWith("https://api.github.com")) {
+                                                                            reqBuilder.header("Authorization", "Bearer $userPat")
+                                                                        }
+                                                                        val response = clientNoRedirects.newCall(reqBuilder.build()).execute()
+                                                                        if (response.isRedirect) {
+                                                                            val nextUrl = response.header("Location")
+                                                                            response.close()
+                                                                            if (nextUrl != null) {
+                                                                                currentUrl = nextUrl
+                                                                                redirectCount++
+                                                                            } else {
+                                                                                break
+                                                                            }
+                                                                        } else {
+                                                                            response.close()
+                                                                            break
+                                                                        }
+                                                                    }
                                                                 }
                                                                 
-                                                                val finalUrl = response.header("Location") ?: response.request.url.toString()
-                                                                response.close()
-                                                                
                                                                 val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
+                                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(currentUrl))
+                                                                    .addRequestHeader("User-Agent", userAgentStr)
                                                                     .setTitle(artifact.name ?: "artifact.zip")
                                                                     .setDescription("Downloading artifact")
                                                                     .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
