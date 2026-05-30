@@ -1,5 +1,5 @@
 {
-  "name": "GitHub Repo Explorer",
+  "name": "Gitpusher-mobile",
   "description": "An Android application to browse GitHub repositories, view sub-folders/files, and upload new files or entire folders concurrently to specific repository paths.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
