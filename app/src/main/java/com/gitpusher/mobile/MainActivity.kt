@@ -676,18 +676,8 @@ fun AppNavHost() {
                                                                     }
                                                                 }
                                                                 
-                                                                val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(currentUrl))
-                                                                    .addRequestHeader("User-Agent", userAgentStr)
-                                                                    .setTitle(artifact.name ?: "artifact.zip")
-                                                                    .setDescription("Downloading artifact")
-                                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                                    .setAllowedNetworkTypes(android.app.DownloadManager.Request.NETWORK_WIFI or android.app.DownloadManager.Request.NETWORK_MOBILE)
-                                                                    .setAllowedOverMetered(true)
-                                                                    .setAllowedOverRoaming(true)
-                                                                dm.enqueue(dmReq)
-                                                                android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(currentUrl))
+                                                                context.startActivity(intent)
                                                             } catch (e: Exception) {
                                                                 android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                                                             } finally {
