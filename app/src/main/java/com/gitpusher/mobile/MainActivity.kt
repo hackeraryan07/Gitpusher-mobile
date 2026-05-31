@@ -35,6 +35,12 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -631,6 +637,54 @@ fun AppNavHost() {
                                 items(artifacts) { artifact ->
                                     val sizeMb = artifact.size_in_bytes / (1024 * 1024.0)
                                     var isPreparing by remember { mutableStateOf(false) }
+
+                                    val performDownload: () -> Unit = {
+                                        isPreparing = true
+                                        android.widget.Toast.makeText(context, "Preparing download...", android.widget.Toast.LENGTH_SHORT).show()
+                                        coroutineScope.launch {
+                                            try {
+                                                val url = artifact.archive_download_url
+                                                val clientNoRedirects = GithubApiManager.client.newBuilder()
+                                                    .followRedirects(false)
+                                                    .followSslRedirects(false)
+                                                    .build()
+                                                    
+                                                val request = okhttp3.Request.Builder()
+                                                    .url(url)
+                                                    .header("Authorization", "Bearer $userPat")
+                                                    .build()
+                                                
+                                                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                                    clientNoRedirects.newCall(request).execute()
+                                                }
+                                                
+                                                val finalUrl = response.header("Location") ?: response.request.url.toString()
+                                                response.close()
+                                                
+                                                val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
+                                                    .setTitle(artifact.name ?: "artifact.zip")
+                                                    .setDescription("Downloading artifact")
+                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
+                                                    .setAllowedNetworkTypes(android.app.DownloadManager.Request.NETWORK_WIFI or android.app.DownloadManager.Request.NETWORK_MOBILE)
+                                                    .setAllowedOverMetered(true)
+                                                    .setAllowedOverRoaming(true)
+                                                dm.enqueue(dmReq)
+                                                android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
+                                            } catch (e: Exception) {
+                                                android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                            } finally {
+                                                isPreparing = false
+                                            }
+                                        }
+                                    }
+
+                                    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+                                        if (isGranted) performDownload()
+                                        else android.widget.Toast.makeText(context, "Storage permission required", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
                                         supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
@@ -638,44 +692,14 @@ fun AppNavHost() {
                                             if (!artifact.expired) {
                                                 Button(
                                                     onClick = {
-                                                        isPreparing = true
-                                                        android.widget.Toast.makeText(context, "Preparing download...", android.widget.Toast.LENGTH_SHORT).show()
-                                                        coroutineScope.launch {
-                                                            try {
-                                                                val url = artifact.archive_download_url
-                                                                val clientNoRedirects = GithubApiManager.client.newBuilder()
-                                                                    .followRedirects(false)
-                                                                    .followSslRedirects(false)
-                                                                    .build()
-                                                                    
-                                                                val request = okhttp3.Request.Builder()
-                                                                    .url(url)
-                                                                    .header("Authorization", "Bearer $userPat")
-                                                                    .build()
-                                                                
-                                                                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                                                                    clientNoRedirects.newCall(request).execute()
-                                                                }
-                                                                
-                                                                val finalUrl = response.header("Location") ?: response.request.url.toString()
-                                                                response.close()
-                                                                
-                                                                val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
-                                                                    .setTitle(artifact.name ?: "artifact.zip")
-                                                                    .setDescription("Downloading artifact")
-                                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                                    .setAllowedNetworkTypes(android.app.DownloadManager.Request.NETWORK_WIFI or android.app.DownloadManager.Request.NETWORK_MOBILE)
-                                                                    .setAllowedOverMetered(true)
-                                                                    .setAllowedOverRoaming(true)
-                                                                dm.enqueue(dmReq)
-                                                                android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
-                                                            } catch (e: Exception) {
-                                                                android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
-                                                            } finally {
-                                                                isPreparing = false
+                                                        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                                                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+                                                                performDownload()
+                                                            } else {
+                                                                permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                                                             }
+                                                        } else {
+                                                            performDownload()
                                                         }
                                                     },
                                                     enabled = !isPreparing
