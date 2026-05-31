@@ -661,16 +661,14 @@ fun AppNavHost() {
                                                 val finalUrl = response.header("Location") ?: response.request.url.toString()
                                                 response.close()
                                                 
-                                                val dm = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
-                                                val dmReq = android.app.DownloadManager.Request(android.net.Uri.parse(finalUrl))
-                                                    .setTitle(artifact.name ?: "artifact.zip")
-                                                    .setDescription("Downloading artifact")
-                                                    .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                                                    .setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, "${artifact.name ?: "artifact"}.zip")
-                                                    .setAllowedNetworkTypes(android.app.DownloadManager.Request.NETWORK_WIFI or android.app.DownloadManager.Request.NETWORK_MOBILE)
-                                                    .setAllowedOverMetered(true)
-                                                    .setAllowedOverRoaming(true)
-                                                dm.enqueue(dmReq)
+                                                val dmData = androidx.work.workDataOf(
+                                                    "url" to finalUrl,
+                                                    "name" to (artifact.name ?: "artifact.zip")
+                                                )
+                                                val dmReq = androidx.work.OneTimeWorkRequestBuilder<com.gitpusher.mobile.DownloadWorker>()
+                                                    .setInputData(dmData)
+                                                    .build()
+                                                androidx.work.WorkManager.getInstance(context).enqueue(dmReq)
                                                 android.widget.Toast.makeText(context, "Download started...", android.widget.Toast.LENGTH_SHORT).show()
                                             } catch (e: Exception) {
                                                 android.widget.Toast.makeText(context, "Download failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
@@ -698,6 +696,9 @@ fun AppNavHost() {
                                                             } else {
                                                                 permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                                                             }
+                                                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                                            android.widget.Toast.makeText(context, "Please enable Notification Permissions for downloads", android.widget.Toast.LENGTH_LONG).show()
+                                                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                                         } else {
                                                             performDownload()
                                                         }
