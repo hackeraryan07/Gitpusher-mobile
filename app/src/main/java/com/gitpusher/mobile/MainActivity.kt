@@ -601,6 +601,16 @@ fun AppNavHost() {
             var jobs by remember { mutableStateOf<List<WorkflowJob>>(emptyList()) }
             var artifacts by remember { mutableStateOf<List<Artifact>>(emptyList()) }
             var loading by remember { mutableStateOf(true) }
+            
+            var pendingDownload: (() -> Unit)? by remember { mutableStateOf(null) }
+            val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+                if (isGranted) {
+                    pendingDownload?.invoke()
+                } else {
+                    android.widget.Toast.makeText(context, "Storage/Notification permission required", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                pendingDownload = null
+            }
 
             LaunchedEffect(Unit) {
                 loading = true
@@ -678,11 +688,6 @@ fun AppNavHost() {
                                         }
                                     }
 
-                                    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-                                        if (isGranted) performDownload()
-                                        else android.widget.Toast.makeText(context, "Storage permission required", android.widget.Toast.LENGTH_SHORT).show()
-                                    }
-
                                     ListItem(
                                         headlineContent = { Text(artifact.name ?: "Unknown") },
                                         supportingContent = { Text(String.format("%.2f MB", sizeMb)) },
@@ -694,10 +699,12 @@ fun AppNavHost() {
                                                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
                                                                 performDownload()
                                                             } else {
+                                                                pendingDownload = performDownload
                                                                 permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                                                             }
                                                         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                                                             android.widget.Toast.makeText(context, "Please enable Notification Permissions for downloads", android.widget.Toast.LENGTH_LONG).show()
+                                                            pendingDownload = performDownload
                                                             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                                         } else {
                                                             performDownload()
