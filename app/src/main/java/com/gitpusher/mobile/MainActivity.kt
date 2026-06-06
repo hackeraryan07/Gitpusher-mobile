@@ -377,35 +377,37 @@ fun AppNavHost() {
                                 val lock = Any()
                                 val semaphore = Semaphore(permits = 3) // maximum 3 concurrent uploads to prevent network & RAM overload
                                 
-                                val treeItems = filesToPush.map { filePtr ->
-                                    async {
-                                        semaphore.withPermit {
-                                            // Lazily load file bytes into memory ONLY during upload turn
-                                            val fileBytes = try {
-                                                contentResolver.openInputStream(filePtr.uri)?.use { stream ->
-                                                    stream.readBytes()
-                                                } ?: ByteArray(0)
-                                            } catch (e: Exception) {
-                                                ByteArray(0)
+                                val treeItems = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    filesToPush.map { filePtr ->
+                                        async {
+                                            semaphore.withPermit {
+                                                // Lazily load file bytes into memory ONLY during upload turn
+                                                val fileBytes = try {
+                                                    contentResolver.openInputStream(filePtr.uri)?.use { stream ->
+                                                        stream.readBytes()
+                                                    } ?: ByteArray(0)
+                                                } catch (e: Exception) {
+                                                    ByteArray(0)
+                                                }
+                                                
+                                                val b64 = android.util.Base64.encodeToString(fileBytes, android.util.Base64.NO_WRAP)
+                                                val blobSha = GithubApiManager.api.createBlob(
+                                                    "Bearer $userPat", owner, repoName, CreateBlobRequest(b64, "base64")
+                                                ).sha
+                                                
+                                                val fullPath = if (targetPath.isEmpty()) filePtr.relativePath else "$targetPath/${filePtr.relativePath}"
+                                                
+                                                synchronized(lock) {
+                                                    uploadedCount++
+                                                    status = "Uploaded $uploadedCount/$totalFiles files: ${filePtr.name}"
+                                                    uploadProgress = uploadedCount.toFloat() / totalFiles
+                                                }
+                                                
+                                                TreeItem(path = fullPath, mode = "100644", type = "blob", sha = blobSha)
                                             }
-                                            
-                                            val b64 = Base64.encodeToString(fileBytes, Base64.NO_WRAP)
-                                            val blobSha = GithubApiManager.api.createBlob(
-                                                "Bearer $userPat", owner, repoName, CreateBlobRequest(b64, "base64")
-                                            ).sha
-                                            
-                                            val fullPath = if (targetPath.isEmpty()) filePtr.relativePath else "$targetPath/${filePtr.relativePath}"
-                                            
-                                            synchronized(lock) {
-                                                uploadedCount++
-                                                status = "Uploaded $uploadedCount/$totalFiles files: ${filePtr.name}"
-                                                uploadProgress = uploadedCount.toFloat() / totalFiles
-                                            }
-                                            
-                                            TreeItem(path = fullPath, mode = "100644", type = "blob", sha = blobSha)
                                         }
-                                    }
-                                }.awaitAll()
+                                    }.awaitAll()
+                                }
                                 
                                 currentStage = "creating_tree"
                                 status = "Compiling Git tree registry on GitHub..."
